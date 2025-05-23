@@ -34,70 +34,17 @@ class JSONWebpageParser:
         """
         self.url = url
         self.settings = settings
-        self.external_session = external_session
-        self.session = None
-        self.owns_session = False
+        
+        if external_session is None:
+            raise ValueError("JSONWebpageParser requires an external_session (aiohttp.ClientSession).")
+        self.session = external_session # Always use the provided external session
 
         # Store discovered media and links
         self.media_files: List[Tuple[str, str, Dict[str, Any]]] = []
         self.links: Set[str] = set()
 
-    async def __aenter__(self):
-        """
-        Context manager entry that creates the aiohttp session if not provided externally
-        """
-        # Use external session if provided, otherwise create a new one
-        if self.external_session is not None:
-            self.session = self.external_session
-            self.owns_session = False
-        else:
-            # Define compression options based on available libraries
-            if HAS_BROTLI:
-                from aiohttp import ClientSession, TCPConnector
-                self.session = ClientSession(
-                    timeout=self._get_timeout(),
-                    headers=self._get_headers(),
-                    connector=TCPConnector(ssl=False)
-                )
-            else:
-                import aiohttp
-                self.session = aiohttp.ClientSession(
-                    timeout=self._get_timeout(),
-                    headers=self._get_headers()
-                )
-            self.owns_session = True
-        return self
-
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
-        """
-        Context manager exit that ensures the session is closed only if we own it
-        """
-        if hasattr(self, "session") and hasattr(self, "owns_session") and self.owns_session:
-            await self.session.close()
-
-    def _get_timeout(self):
-        """
-        Get aiohttp timeout settings
-        """
-        import aiohttp
-        page_timeout = self.settings.get("page_timeout", 60)
-        return aiohttp.ClientTimeout(total=page_timeout, connect=20, sock_read=page_timeout)
-
-    def _get_headers(self) -> Dict[str, str]:
-        """
-        Get request headers with enhanced browser simulation
-        """
-        return {
-            "User-Agent": self.settings.get(
-                "user_agent",
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
-            ),
-            "Accept-Language": self.settings.get("accept_language", "en-US,en;q=0.9"),
-            "Accept": "application/json, text/javascript, */*; q=0.01",
-            "Accept-Encoding": "gzip, deflate, br",
-            "X-Requested-With": "XMLHttpRequest",
-            "Sec-Fetch-Mode": "cors",
-        }
+    # __aenter__ and __aexit__ removed, session managed externally by AsyncClientManager
+    # _get_headers and _get_timeout removed, managed by AsyncClientManager
 
     async def parse(self) -> Tuple[Set[str], List[Tuple[str, str, Dict[str, Any]]]]:
         """
@@ -107,16 +54,16 @@ class JSONWebpageParser:
             Tuple of (discovered_links, media_files)
         """
         try:
-            async with self as parser:  # Use context manager to handle session lifecycle
-                json_data = await self._get_json()
-                if not json_data:
-                    return set(), []
+            # No longer using 'async with self' as session is managed externally
+            json_data = await self._get_json()
+            if not json_data:
+                return set(), []
 
-                # Process JSON data
-                self._extract_media_from_json(json_data)
-                self._extract_links_from_json(json_data)
+            # Process JSON data
+            self._extract_media_from_json(json_data)
+            self._extract_links_from_json(json_data)
 
-                return self.links, self.media_files
+            return self.links, self.media_files
         except Exception as e:
             logger.error(f"Error parsing JSON from {self.url}: {str(e)}")
             raise
@@ -129,7 +76,16 @@ class JSONWebpageParser:
             Parsed JSON data or None if failed
         """
         try:
-            async with self.session.get(self.url, headers=self._get_headers()) as response:
+            # Headers for this specific request, if any, can be added here.
+            # Session default headers are set by AsyncClientManager.
+            # For JSON, usually, specific 'Accept' header might be useful if not default.
+            request_specific_headers = {
+                 "Accept": self.settings.get("json_accept_header", "application/json, text/javascript, */*; q=0.01"),
+                 # Add other headers if needed, e.g. X-Requested-With
+                 "X-Requested-With": "XMLHttpRequest",
+            }
+
+            async with self.session.get(self.url, headers=request_specific_headers) as response:
                 if response.status != 200:
                     logger.error(f"Failed to fetch JSON from {self.url}: {response.status}")
                     return None

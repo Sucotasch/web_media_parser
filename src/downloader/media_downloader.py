@@ -14,9 +14,11 @@ import logging
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+from src import constants as K # Import constants
 
 logger = logging.getLogger(__name__)
 
+# WRITE_BUFFER_SIZE is now in K.WRITE_BUFFER_SIZE
 
 class MediaDownloader:
     """
@@ -24,541 +26,246 @@ class MediaDownloader:
     """
 
     def __init__(self, url, filepath, settings, media_type="image", source_url=None):
+        """
+        Initializes MediaDownloader.
+        filepath: Full path including desired subdirectories, before final uniqueness.
+        """
         self.url = url
-        self.filepath = filepath
-        self.settings = settings
+        self.filepath = filepath 
+        self.settings = settings # Settings from ParserManager, which got them from SettingsDialog
         self.media_type = media_type
-        self.source_url = source_url
+        self.source_url = source_url 
         self.progress_callback = None
-
-        # Create requests session with custom settings
         self.session = self._create_session()
-
-        # Rate limiting
-        self.rate_limit = self.settings.get(
-            "max_download_speed", 0
-        )  # KB/s, 0 = unlimited
-
-        # Thread settings
+        self.rate_limit = self.settings.get(K.SETTING_MAX_DOWNLOAD_SPEED, 0) # 0 for unlimited
+        # Use K.MAX_THREADS_PER_FILE_CAP as a hard upper limit
         self.threads_per_file = min(
-            self.settings.get("threads_per_file", 1), 8
-        )  # Max 8 threads per file
-
-    def _create_session(self):
-        """
-        Create requests session with retry and custom headers
-        """
-        session = requests.Session()
-
-        # Configure retry strategy
-        retry_strategy = Retry(
-            total=self.settings.get("retry_count", 3),
-            backoff_factor=0.5,
-            status_forcelist=[429, 500, 502, 503, 504],
-            allowed_methods=["GET", "HEAD"],
+            self.settings.get(K.SETTING_THREADS_PER_FILE, K.DEFAULT_THREADS_PER_FILE),
+            K.MAX_THREADS_PER_FILE_CAP 
         )
 
+    def _create_session(self):
+        session = requests.Session()
+        retry_strategy = Retry(
+            total=self.settings.get(K.SETTING_RETRY_COUNT, K.DEFAULT_RETRY_COUNT),
+            backoff_factor=0.5, # This could also be a constant
+            status_forcelist=[429, 500, 502, 503, 504], # HTTP status codes to retry on
+            allowed_methods=["GET", "HEAD"],
+        )
         adapter = HTTPAdapter(max_retries=retry_strategy)
         session.mount("http://", adapter)
         session.mount("https://", adapter)
-
-        # Set headers
+        
         headers = {
-            "User-Agent": self.settings.get(
-                "user_agent",
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
-            ),
-            "Accept-Language": self.settings.get("accept_language", "en-US,en;q=0.9"),
+            "User-Agent": self.settings.get(K.SETTING_USER_AGENT, K.DEFAULT_USER_AGENT),
+            "Accept-Language": self.settings.get(K.SETTING_ACCEPT_LANGUAGE, K.DEFAULT_ACCEPT_LANGUAGE),
         }
 
-        # Set appropriate Accept header based on media type
-        if self.media_type == "image":
-            headers["Accept"] = (
-                "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8"
-            )
-        elif self.media_type == "video":
-            headers["Accept"] = "video/mp4,video/webm,video/*,*/*;q=0.8"
-        else:
-            headers["Accept"] = "*/*"
+        if self.media_type == "image": 
+            headers["Accept"] = K.DEFAULT_ACCEPT_IMAGE_HEADER
+        elif self.media_type == "video": 
+            headers["Accept"] = K.DEFAULT_ACCEPT_VIDEO_HEADER
+        else: 
+            headers["Accept"] = K.DEFAULT_ACCEPT_HEADER # Generic accept
 
-        # Set referrer if source URL is available
         if self.source_url:
-            referrer_policy = self.settings.get("referrer", "auto")
+            referrer_policy = self.settings.get(K.SETTING_REFERRER_POLICY, "auto") # Default to "auto"
             if referrer_policy == "origin":
-                parsed = urlparse(self.source_url)
-                headers["Referer"] = f"{parsed.scheme}://{parsed.netloc}"
-            elif referrer_policy == "auto":
+                parsed_source = urlparse(self.source_url)
+                headers["Referer"] = f"{parsed_source.scheme}://{parsed_source.netloc}"
+            elif referrer_policy == "auto": # "auto" means send full source_url as referrer
                 headers["Referer"] = self.source_url
-
+            # If "none", no Referer header is added.
+        
         session.headers.update(headers)
         return session
 
-    def set_progress_callback(self, callback):
-        """
-        Set callback function for progress updates
-        """
-        self.progress_callback = callback
+    def set_progress_callback(self, callback): self.progress_callback = callback
 
-    def download(self, timeout=None, retries=None):
-        """
-        Download media file with customizable timeout and retry count
-        
-        Args:
-            timeout (int, optional): Custom timeout in seconds. Defaults to settings timeout.
-            retries (int, optional): Custom retry count. Defaults to settings retry count.
-        """
+    def download(self, timeout=None, retries=None): # retries param is less used now session handles it
         try:
-            # Save original settings
-            original_timeout = self.settings.get("timeout", 30)
-            original_retries = self.settings.get("retry_count", 3)
-            
-            # Apply custom settings if provided
-            if timeout is not None:
-                self.settings["timeout"] = timeout
-            if retries is not None:
-                self.settings["retry_count"] = retries
-                
-            # Recreate session with new settings if retries changed
-            if retries is not None:
-                self.session = self._create_session()
-                
-            # Download with custom settings
-            result = self._do_download()
-            
-            # Restore original settings
-            if timeout is not None:
-                self.settings["timeout"] = original_timeout
-            if retries is not None:
-                self.settings["retry_count"] = original_retries
-                
-            return result
+            # Use specific timeout if provided, else from settings, else default constant
+            current_timeout = timeout if timeout is not None else self.settings.get(K.SETTING_TIMEOUT, K.DEFAULT_TIMEOUT)
+            return self._do_download(custom_timeout=current_timeout)
         except Exception as e:
-            logger.error(f"Download failed for {self.filepath}: {str(e)}")
+            logger.error(f"Download failed for {self.filepath}: {str(e)}", exc_info=True)
             return {"success": False, "error": str(e)}
 
-    def _get_unique_filepath(self, base_path: str, remote_size: int) -> str:
-        """
-        Generate unique filepath using timestamp for uniqueness
-        Creates a subdirectory based on the source URL domain if available
-        Returns: unique filepath
-        """
-        # Create a subdirectory based on the source URL if available
-        dir_path = os.path.dirname(base_path)
-        base_name, ext = os.path.splitext(os.path.basename(base_path))
-        
-        # If we have a source URL, create a subdirectory based on its domain and path
-        if self.source_url:
-            from urllib.parse import urlparse
-            parsed = urlparse(self.source_url)
-            domain = parsed.netloc
-            
-            # Remove www. prefix if present
-            if domain.startswith('www.'):
-                domain = domain[4:]
-                
-            # Create a sanitized path component
-            path_component = ''
-            if parsed.path and parsed.path != '/':
-                path = parsed.path.strip('/')
-                # Take the first 2 path components for organization
-                path_parts = path.split('/')
-                if len(path_parts) > 0:
-                    path_component = '_'.join(path_parts[:min(2, len(path_parts))])
-                    # Sanitize the path component
-                    path_component = re.sub(r'[<>:"\/\\|?*]', '_', path_component)
-                    
-            # Create the subdirectory name
-            if path_component:
-                subdir_name = f"{domain}_{path_component}"
-            else:
-                subdir_name = domain
-                
-            # Create subdirectory
-            subdir_path = os.path.join(dir_path, subdir_name)
-            os.makedirs(subdir_path, exist_ok=True)
-            
-            # Update the file path
-            dir_path = subdir_path
-        
-        # Check if the file exists in the new path
-        new_path = os.path.join(dir_path, f"{base_name}{ext}")
-        if not os.path.exists(new_path):
-            return new_path
+    def _ensure_unique_filepath_at_destination(self, current_filepath: str) -> str:
+        if not os.path.exists(current_filepath):
+            return current_filepath
+        dir_path, original_basename = os.path.split(current_filepath)
+        base_name, ext = os.path.splitext(original_basename)
+        counter = 1
+        unique_filepath = os.path.join(dir_path, f"{base_name}_{counter}{ext}")
+        while os.path.exists(unique_filepath):
+            counter += 1
+            unique_filepath = os.path.join(dir_path, f"{base_name}_{counter}{ext}")
+        logger.debug(f"Adjusted filepath from {current_filepath} to {unique_filepath} due to existing file.")
+        return unique_filepath
 
-        # If file exists, add timestamp for uniqueness
-        timestamp = int(time.time() * 1000)  # Millisecond timestamp for more uniqueness
-        return os.path.join(dir_path, f"{base_name}_{timestamp}{ext}")
-
-    def _do_download(self):
-        """
-        Internal download implementation
-        """
+    def _do_download(self, custom_timeout=None):
         try:
-            # Quick check for common webpage file extensions that should NOT be downloaded
-            non_media_extensions = [
-                # Webpage extensions
-                ".html", ".htm", ".php", ".asp", ".aspx", ".jsp", ".jspx",
-                ".cfm", ".cfml", ".py", ".rb", ".pl", ".cgi", ".shtml", ".xhtml",
-                # Script and data extensions
-                ".js", ".jsx", ".ts", ".tsx", ".coffee", ".es6", ".mjs",
-                ".css", ".scss", ".sass", ".less", 
-                ".json", ".xml", ".rss", ".atom", ".yaml", ".yml", 
-                ".wasm", ".map"
-            ]
-            
+            self.filepath = self._ensure_unique_filepath_at_destination(self.filepath)
+            non_media_extensions = [ ".html", ".htm", ".php", ".asp", ".aspx", ".js", ".css", ".json", ".xml"]
             url_lower = self.url.lower()
-            if any(url_lower.endswith(ext) for ext in non_media_extensions):
-                logger.warning(f"Skipping non-media file: {self.url}")
-                return {"success": False, "error": "Non-media files should not be downloaded"}
+            if any(url_lower.endswith(ext) or f"{ext}?" in url_lower or f"{ext}#" in url_lower for ext in non_media_extensions):
+                return {"success": False, "error": "Non-media file based on URL extension"}
             
-            # Create directory if not exists first
-            os.makedirs(os.path.dirname(self.filepath), exist_ok=True)
+            timeout_to_use = custom_timeout if custom_timeout is not None else self.settings.get(K.SETTING_TIMEOUT, K.DEFAULT_TIMEOUT)
+            content_length = 0
+            response_head = None # Define response_head before try block
 
-            # Check file size and get initial response
             try:
-                response = self.session.head(
-                    self.url, timeout=self.settings.get("timeout", 30)
-                )
-                content_length = int(response.headers.get("Content-Length", 0))
-                remote_modified = response.headers.get("Last-Modified")
-                
-                # Check Content-Type to filter out HTML and script files
-                content_type = response.headers.get("Content-Type", "").lower()
+                response_head = self.session.head(self.url, timeout=timeout_to_use)
+                response_head.raise_for_status()
+                content_length = int(response_head.headers.get("Content-Length", 0))
+                content_type = response_head.headers.get("Content-Type", "").lower()
                 if any(t in content_type for t in ["text/html", "application/javascript", "text/javascript", "text/css", "application/json"]):
-                    logger.warning(f"Skipping webpage/script content: {self.url} (Content-Type: {content_type})")
-                    return {"success": False, "error": f"Webpage/script content should not be downloaded (Content-Type: {content_type})"}
+                    return {"success": False, "error": f"Webpage/script content (Content-Type: {content_type})"}
+                
+                min_img_size_kb = self.settings.get(K.SETTING_MIN_IMG_SIZE, K.DEFAULT_MIN_IMAGE_SIZE_KB)
+                min_vid_size_kb = self.settings.get(K.SETTING_MIN_VID_SIZE, K.DEFAULT_MIN_VIDEO_SIZE_KB)
 
-                # Apply size filters only if we got a valid content length
                 if content_length > 0:
                     size_kb = content_length / 1024
-                    
-                    # Get minimum size setting based on media type
-                    # Log only the relevant size settings
-                    logger.info(f"Min image size setting: {self.settings.get('min_image_size', 0)} KB")
-                    logger.info(f"Min video size setting: {self.settings.get('min_video_size', 0)} KB")
-                    
-                    min_size_key = "min_image_size" if self.media_type == "image" else "min_video_size"
-                    logger.info(f"Using {min_size_key} for media type: {self.media_type}")
-                    min_size = self.settings.get(min_size_key, 0)
-                    
-                    # Log filter details for debugging
-                    logger.info(
-                        f"Size check for {self.url} - Media type: {self.media_type}, "
-                        f"Size: {size_kb:.2f}KB, Min size: {min_size}KB, Setting key: {min_size_key}"
-                    )
-                    
-                    if min_size > 0 and size_kb < min_size:
-                        logger.info(
-                            f"Skipping {self.url} - too small ({size_kb:.2f}KB < {min_size}KB)"
-                        )
-                        return {"success": False, "error": "File too small"}
-            except Exception as e:
-                logger.warning(f"Could not check size for {self.url}: {str(e)}")
-                content_length = 0
+                    min_size_for_type = min_img_size_kb if self.media_type == "image" else min_vid_size_kb
+                    if min_size_for_type > 0 and size_kb < min_size_for_type:
+                        return {"success": False, "error": f"File too small ({size_kb:.2f}KB < {min_size_for_type}KB)"}
+            except requests.exceptions.RequestException as e:
+                logger.warning(f"HEAD request failed for {self.url}: {str(e)}. Will attempt GET.")
 
-            # Get unique filepath considering sizes
-            if content_length > 0:
-                self.filepath = self._get_unique_filepath(self.filepath, content_length)
-
-            # Always use write mode, no resuming downloads
             mode = "wb"
-            headers = {}
+            can_multi_thread = (self.threads_per_file > 1 and 
+                                content_length > 0 and 
+                                content_length > K.WRITE_BUFFER_SIZE * self.threads_per_file and 
+                                response_head and response_head.headers.get("Accept-Ranges") == "bytes")
 
-            # Attempt multi-threaded download if conditions allow
-            if self.threads_per_file > 1 and mode == "wb" and content_length > 0:
+            if can_multi_thread:
                 try:
-                    result = self._download_with_threads()
-                    if result["success"]:
-                        return result
-                    # If multi-threaded fails, fall back to single-threaded
-                    logger.warning(
-                        "Multi-threaded download failed, falling back to single-threaded"
-                    )
+                    logger.info(f"Attempting multi-threaded download for {self.filepath}")
+                    result = self._download_with_threads(content_length, custom_timeout=timeout_to_use)
+                    if result["success"]: return result
+                    logger.warning(f"Multi-threaded download failed for {self.filepath}, falling back to single-threaded.")
                 except Exception as e:
-                    logger.warning(
-                        f"Multi-threaded download failed: {str(e)}, falling back to single-threaded"
-                    )
+                    logger.warning(f"Multi-threaded download for {self.filepath} raised {e}, falling back.", exc_info=True)
+            
+            logger.info(f"Starting single-threaded download: {os.path.basename(self.filepath)}")
+            response_get = self.session.get(self.url, stream=True, timeout=timeout_to_use)
+            response_get.raise_for_status()
 
-            # Single-threaded download
-            logger.info(
-                f"Starting single-threaded download: {os.path.basename(self.filepath)}"
-            )
-            response = self.session.get(
-                self.url,
-                headers=headers,
-                stream=True,
-                timeout=self.settings.get("timeout", 30),
-            )
+            if content_length == 0:
+                content_length = int(response_get.headers.get("Content-Length", 0))
 
-            if response.status_code not in [200, 206]:
-                return {
-                    "success": False,
-                    "error": f"HTTP error: {response.status_code}",
-                }
-
-            # Download file with progress tracking and rate limiting
+            write_buffer = bytearray()
             with open(self.filepath, mode) as f:
                 start_time = time.time()
-                chunk_size = 8192  # 8KB chunks
-                downloaded = 0
-
-                for chunk in response.iter_content(chunk_size=chunk_size):
-                    if chunk:  # Filter out keep-alive chunks
-                        f.write(chunk)
-                        downloaded += len(chunk)
-
-                        # Update progress if we know the total size
-                        if content_length > 0 and self.progress_callback:
-                            progress = min(
-                                100, int((downloaded / content_length) * 100)
-                            )
-                            self.progress_callback(progress)
-                        elif self.progress_callback:
-                            # If we don't know the size, just show activity
-                            self.progress_callback(-1)
-
-                        # Apply rate limiting if enabled
+                network_chunk_size = 8192  
+                downloaded_bytes = 0
+                for chunk in response_get.iter_content(chunk_size=network_chunk_size):
+                    if chunk:
+                        write_buffer.extend(chunk)
+                        downloaded_bytes += len(chunk)
+                        if self.progress_callback:
+                            prog = min(100, int((downloaded_bytes / content_length) * 100)) if content_length > 0 else -1
+                            self.progress_callback(prog)
+                        if len(write_buffer) >= K.WRITE_BUFFER_SIZE:
+                            try: f.write(write_buffer); write_buffer.clear()
+                            except Exception as e: return {"success": False, "error": f"Disk write error: {e}"}
                         if self.rate_limit > 0:
                             elapsed = time.time() - start_time
-                            expected_time = downloaded / (
-                                self.rate_limit * 1024
-                            )  # Convert KB/s to bytes/s
-                            if elapsed < expected_time:
-                                time.sleep(expected_time - elapsed)
+                            expected_time = downloaded_bytes / (self.rate_limit * 1024)
+                            if elapsed < expected_time: time.sleep(expected_time - elapsed)
+                if write_buffer:
+                    try: f.write(write_buffer)
+                    except Exception as e: return {"success": False, "error": f"Disk write error: {e}"}
 
-            # Verify download completed successfully
-            if content_length > 0:
-                final_size = os.path.getsize(self.filepath)
-                if final_size != content_length:
-                    return {
-                        "success": False,
-                        "error": f"Downloaded file size mismatch: expected {content_length}, got {final_size}",
-                    }
+            if content_length > 0 and os.path.getsize(self.filepath) != content_length:
+                try: os.remove(self.filepath); except OSError: pass
+                return {"success": False, "error": f"Size mismatch: expected {content_length}, got {os.path.getsize(self.filepath)}"}
 
-            # Final progress update
-            if self.progress_callback:
-                self.progress_callback(100)
-
-            logger.info(
-                f"Download completed successfully: {os.path.basename(self.filepath)}"
-            )
+            if self.progress_callback: self.progress_callback(100)
+            logger.info(f"Download completed: {os.path.basename(self.filepath)}")
             return {"success": True, "message": "File downloaded successfully"}
 
+        except requests.exceptions.HTTPError as e:
+            return {"success": False, "error": f"HTTP error: {e.response.status_code if e.response else 'Unknown'}"}
+        except requests.exceptions.RequestException as e:
+            return {"success": False, "error": f"Network error: {e}"}
         except Exception as e:
-            logger.error(f"Download failed: {str(e)}")
+            logger.error(f"Generic download error for {self.url}: {str(e)}", exc_info=True)
             return {"success": False, "error": str(e)}
 
-    def _download_with_threads(self):
-        """
-        Download file using multiple threads
-        """
-        temp_files = []
+    def _download_with_threads(self, total_size, custom_timeout=None):
+        temp_files, threads = [], []
+        progress_lock = threading.Lock()
+        progress_dict = {"total": 0, "success": True, "errors": []}
+        timeout_to_use = custom_timeout if custom_timeout is not None else self.settings.get(K.SETTING_TIMEOUT, K.DEFAULT_TIMEOUT)
+        
+        num_threads = min(self.threads_per_file, max(1, total_size // K.MIN_CHUNK_SIZE_PER_THREAD_MT), K.MAX_THREADS_PER_FILE_CAP)
+        if num_threads <= 1: return {"success": False, "error": "Not enough parts for multi-thread based on min chunk size"}
+
+        chunk_size_for_threads = total_size // num_threads
+        for i in range(num_threads):
+            start = i * chunk_size_for_threads
+            end = (i + 1) * chunk_size_for_threads - 1 if i < num_threads - 1 else total_size - 1
+            temp_file = f"{self.filepath}.part{i}"
+            temp_files.append(temp_file)
+            thread = threading.Thread(target=self._download_chunk, args=(start, end, temp_file, total_size, progress_dict, progress_lock, timeout_to_use))
+            thread.daemon = True; thread.start(); threads.append(thread)
+        for thread in threads: thread.join()
+
+        if not progress_dict["success"]:
+            for temp_file in temp_files:
+                if os.path.exists(temp_file): try: os.remove(temp_file); except OSError: pass
+            return {"success": False, "error": f"Chunk failure(s): {progress_dict['errors']}"}
         try:
-            # Get file info
-            response = self.session.head(
-                self.url, timeout=self.settings.get("timeout", 30)
-            )
-
-            # Check if request was successful
-            if response.status_code != 200:
-                return {
-                    "success": False,
-                    "error": f"HTTP error: {response.status_code}",
-                }
-
-            # Check if server supports range requests
-            if (
-                "Accept-Ranges" not in response.headers
-                or response.headers["Accept-Ranges"] != "bytes"
-            ):
-                logger.info(
-                    "Server does not support range requests, falling back to single-threaded download"
-                )
-                return {"success": False, "error": "Range requests not supported"}
-
-            # Get file size
-            total_size = int(response.headers.get("Content-Length", 0))
-            if total_size == 0:
-                logger.info(
-                    "Unknown file size, falling back to single-threaded download"
-                )
-                return {"success": False, "error": "Unknown file size"}
-
-            # Calculate optimal thread count based on file size
-            # Use fewer threads for smaller files
-            min_chunk_size = 1024 * 1024  # 1MB minimum chunk size
-            optimal_threads = min(
-                self.threads_per_file,
-                max(1, total_size // min_chunk_size),
-                8,  # Hard maximum of 8 threads
-            )
-
-            # Calculate chunk size
-            chunk_size = total_size // optimal_threads
-
-            # Create and start download threads
-            threads = []
-            progress_lock = threading.Lock()
-            progress_dict = {"total": 0, "success": True}
-
-            logger.info(
-                f"Starting multi-threaded download with {optimal_threads} threads"
-            )
-
-            for i in range(optimal_threads):
-                # Calculate range for this thread
-                start = i * chunk_size
-                end = (
-                    (i + 1) * chunk_size - 1
-                    if i < optimal_threads - 1
-                    else total_size - 1
-                )
-
-                # Create temporary file
-                temp_file = f"{self.filepath}.part{i}"
-                temp_files.append(temp_file)
-
-                # Create and start thread
-                thread = threading.Thread(
-                    target=self._download_chunk,
-                    args=(
-                        start,
-                        end,
-                        temp_file,
-                        total_size,
-                        progress_dict,
-                        progress_lock,
-                    ),
-                )
-                thread.daemon = True
-                thread.start()
-                threads.append(thread)
-
-            # Wait for all threads to complete
-            for thread in threads:
-                thread.join()
-
-            # Check if all chunks were downloaded successfully
-            if not progress_dict["success"]:
-                raise Exception("One or more chunks failed to download")
-
-            # Combine all chunks
-            logger.info("Combining downloaded chunks")
             with open(self.filepath, "wb") as outfile:
                 for temp_file in temp_files:
-                    if os.path.exists(temp_file):
-                        with open(temp_file, "rb") as infile:
-                            outfile.write(infile.read())
-
-            # Verify final file size
-            final_size = os.path.getsize(self.filepath)
-            if final_size != total_size:
-                raise Exception(
-                    f"File size mismatch after combining chunks: expected {total_size}, got {final_size}"
-                )
-
-            # Clean up temporary files
-            for temp_file in temp_files:
-                if os.path.exists(temp_file):
-                    try:
-                        os.remove(temp_file)
-                    except Exception:
-                        pass
-
-            # Final progress update
-            if self.progress_callback:
-                self.progress_callback(100)
-
-            logger.info("Multi-threaded download completed successfully")
-            return {"success": True, "message": "File downloaded successfully"}
-
+                    if not os.path.exists(temp_file): raise IOError(f"Missing part: {temp_file}")
+                    with open(temp_file, "rb") as infile: outfile.write(infile.read())
+                    try: os.remove(temp_file); except OSError: pass # Clean up successful part
+            if os.path.getsize(self.filepath) != total_size:
+                try: os.remove(self.filepath); except OSError: pass
+                return {"success": False, "error": "Combined file size mismatch"}
+            if self.progress_callback: self.progress_callback(100)
+            return {"success": True, "message": "Multi-threaded download success"}
         except Exception as e:
-            # Clean up temporary files
+            if os.path.exists(self.filepath): try: os.remove(self.filepath); except OSError: pass
+            return {"success": False, "error": f"Combining/verifying error: {e}"}
+        finally: # Ensure all temp files are attempted to be cleaned up
             for temp_file in temp_files:
-                if os.path.exists(temp_file):
-                    try:
-                        os.remove(temp_file)
-                    except Exception:
-                        pass
+                if os.path.exists(temp_file): try: os.remove(temp_file); except OSError: pass
 
-            logger.error(f"Multi-threaded download failed: {str(e)}")
-            return {"success": False, "error": str(e)}
-
-    def _download_chunk(
-        self, start, end, filename, total_size, progress_dict, progress_lock
-    ):
-        """
-        Download a chunk of the file
-        """
+    def _download_chunk(self, start, end, filename, total_size, progress_dict, progress_lock, timeout_val):
         headers = {"Range": f"bytes={start}-{end}"}
-        chunk_size = 8192  # 8KB chunks
-        retries = self.settings.get("retry_count", 3)
-        retry_delay = 0.5  # Initial retry delay in seconds
-
-        for attempt in range(retries + 1):
-            try:
-                response = self.session.get(
-                    self.url,
-                    headers=headers,
-                    stream=True,
-                    timeout=self.settings.get("timeout", 30),
-                )
-
-                if response.status_code not in [200, 206]:
-                    if attempt < retries:
-                        time.sleep(retry_delay * (2**attempt))  # Exponential backoff
-                        continue
-                    with progress_lock:
-                        progress_dict["success"] = False
-                    return
-
-                downloaded = 0
-                start_time = time.time()
-
-                with open(filename, "wb") as f:
-                    for chunk in response.iter_content(chunk_size=chunk_size):
-                        if chunk:
-                            f.write(chunk)
-                            downloaded += len(chunk)
-
-                            # Update progress
-                            with progress_lock:
-                                progress_dict["total"] += len(chunk)
-                                if self.progress_callback:
-                                    progress = min(
-                                        99,  # Leave room for final verification
-                                        int(
-                                            (progress_dict["total"] / total_size) * 100
-                                        ),
-                                    )
-                                    self.progress_callback(progress)
-
-                            # Apply rate limiting if enabled
-                            if self.rate_limit > 0:
-                                elapsed = time.time() - start_time
-                                expected_time = downloaded / (
-                                    self.rate_limit * 1024 / self.threads_per_file
-                                )  # Adjust limit per thread
-                                if elapsed < expected_time:
-                                    time.sleep(expected_time - elapsed)
-
-                # Verify chunk size after download
-                if os.path.getsize(filename) != (end - start + 1):
-                    if attempt < retries:
-                        time.sleep(retry_delay * (2**attempt))
-                        continue
-                    with progress_lock:
-                        progress_dict["success"] = False
-                    return
-
-                # Successfully downloaded chunk
-                return
-
-            except Exception as e:
-                logger.warning(f"Chunk download attempt {attempt + 1} failed: {str(e)}")
-                if attempt < retries:
-                    time.sleep(retry_delay * (2**attempt))
-                    continue
-                with progress_lock:
-                    progress_dict["success"] = False
-                return
+        network_chunk_size_thread = 8192 
+        try:
+            response = self.session.get(self.url, headers=headers, stream=True, timeout=timeout_val)
+            response.raise_for_status()
+            write_buffer_chunk = bytearray()
+            downloaded_this_chunk = 0 # For this specific chunk part
+            with open(filename, "wb") as f:
+                for chunk_data in response.iter_content(chunk_size=network_chunk_size_thread):
+                    if not progress_dict["success"]: return # Check if another thread failed
+                    if chunk_data:
+                        write_buffer_chunk.extend(chunk_data)
+                        downloaded_this_chunk += len(chunk_data)
+                        with progress_lock:
+                            progress_dict["total"] += len(chunk_data) # Update overall progress
+                            if self.progress_callback:
+                                prog = min(99, int((progress_dict["total"] / total_size) * 100))
+                                self.progress_callback(prog)
+                        if len(write_buffer_chunk) >= K.WRITE_BUFFER_SIZE:
+                            f.write(write_buffer_chunk); write_buffer_chunk.clear()
+                        # Simplified rate limiting for threaded chunks - focus on buffer primarily
+                if write_buffer_chunk: f.write(write_buffer_chunk) 
+            
+            if os.path.getsize(filename) != (end - start + 1): # Verify this chunk's size
+                raise IOError(f"Chunk size mismatch: expected {end - start + 1}, got {os.path.getsize(filename)}")
+        except Exception as e:
+            error_msg = f"Chunk {filename} failed: {type(e).__name__} - {e}"
+            logger.error(error_msg)
+            with progress_lock:
+                progress_dict["success"] = False
+                progress_dict["errors"].append(error_msg)
