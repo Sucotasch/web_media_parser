@@ -298,6 +298,7 @@ class ParserManager(QObject):
 
     async def _parser_worker(self, session):
         while not self._stop_event.is_set():
+            logger.info(f"Parser worker {asyncio.current_task().get_name()} starting new iteration.")
             if self.is_paused:
                 await self._pause_event.wait()
                 if self._stop_event.is_set(): break
@@ -311,6 +312,7 @@ class ParserManager(QObject):
                 continue
             current_url, depth, source_page_url, context = url_data
             try:
+                logger.info(f"Parser worker {asyncio.current_task().get_name()} processing URL: {current_url} (depth: {depth})")
                 if not current_url.startswith(("http://", "https://")):
                     current_url = urljoin(source_page_url or self.start_url, current_url)
                 current_url = normalize_url(current_url)
@@ -321,11 +323,11 @@ class ParserManager(QObject):
                 links_found, media_files_found = await self._invoke_parser(current_url, session, is_json, context)
                 await self._process_parser_results(current_url, depth, links_found, media_files_found, context)
             except Exception as e:
-                logger.error(f"Error processing URL {current_url}: {str(e)}", exc_info=True)
+                logger.error(f"Error processing URL {current_url} in parser {asyncio.current_task().get_name()}: {str(e)}", exc_info=True)
                 if current_url not in self.processed_urls: self.processed_urls.add(current_url)
             finally:
                 self.url_queue.task_done()
-        logger.info(f"Parser worker {threading.get_ident()} finished.")
+        logger.info(f"Parser worker {asyncio.current_task().get_name()} fully stopped.")
 
     async def _process_media_files(self, media_files: List[Tuple[str, str, Dict[str, Any]]], source_url: str) -> None:
         if not media_files: return
@@ -380,6 +382,7 @@ class ParserManager(QObject):
 
     async def _downloader_worker(self) -> None:
         while not self._stop_event.is_set():
+            logger.info(f"Downloader worker {asyncio.current_task().get_name()} starting new iteration.")
             try:
                 if self.is_paused:
                     await self._pause_event.wait()
@@ -390,6 +393,7 @@ class ParserManager(QObject):
             if not media_item:
                 self.download_queue.task_done(); continue
             try:
+                logger.info(f"Downloader worker {asyncio.current_task().get_name()} processing media item: {media_item.get('url')}")
                 url = media_item["url"]
                 filepath_from_queue = media_item["filepath"] 
                 domain = urlparse(url).netloc
@@ -425,10 +429,10 @@ class ParserManager(QObject):
                         self.quarantined_domains.add(domain)
                         logger.warning(f"Domain {domain} quarantined after {domain_state['failures']} failures.")
             except Exception as err:
-                logger.error(f"Error in downloader_worker for {media_item.get('url', 'Unknown URL')}: {str(err)}", exc_info=True)
+                logger.error(f"Error in downloader_worker {asyncio.current_task().get_name()} for {media_item.get('url', 'Unknown URL')}: {str(err)}", exc_info=True)
             finally:
                 self.download_queue.task_done()
-        logger.info(f"Downloader worker {threading.get_ident()} finished.")
+        logger.info(f"Downloader worker {asyncio.current_task().get_name()} fully stopped.")
 
     def pause_parsing(self) -> None:
         self.is_paused = True; self._pause_event.clear(); logger.info("Parsing paused")

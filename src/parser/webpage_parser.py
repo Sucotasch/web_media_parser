@@ -11,10 +11,11 @@ import time
 import json
 import asyncio
 import logging
-import mimetypes 
-from typing import Set, List, Tuple, Dict, Any, Optional, Union 
+import mimetypes
+from typing import Set, List, Tuple, Dict, Any, Optional, Union
+from urllib.parse import urlparse, urljoin
 
-import filetype 
+import filetype
 try:
     import brotli 
     HAS_BROTLI = True 
@@ -314,8 +315,17 @@ class WebpageParser:
             url, width = parts[0], 0
             if len(parts) > 1:
                 desc = parts[1]
-                if desc.endswith("w"): try: width = int(desc[:-1]); except ValueError: pass
-                elif desc.endswith("x"): try: density = float(desc[:-1]); width = int(density * 1000); except ValueError: pass 
+                if desc.endswith("w"):
+                    try:
+                        width = int(desc[:-1])
+                    except ValueError:
+                        pass
+                elif desc.endswith("x"):
+                    try:
+                        density = float(desc[:-1])
+                        width = int(density * 1000)
+                    except ValueError:
+                        pass
             candidates.append({"url": url, "width": width, "source": "srcset"})
         return candidates
 
