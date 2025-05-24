@@ -13,6 +13,7 @@ import asyncio
 import logging
 import mimetypes 
 from typing import Set, List, Tuple, Dict, Any, Optional, Union 
+from urllib.parse import urljoin # Added this import
 
 import filetype 
 try:
@@ -21,7 +22,7 @@ try:
 except ImportError:
     HAS_BROTLI = False
 
-from src.parser.utils import is_image_url, is_media_url, is_valid_url, get_domain, is_same_domain
+from src.parser.utils import is_image_url, is_media_url, is_valid_url, get_domain, is_same_domain, is_audio_url
 from src.parser.site_pattern_manager import SitePatternManager
 from src import constants as K 
 
@@ -72,6 +73,7 @@ class WebpageParser:
     JS_PATTERNS = { 
         "image_sources": [r'["\'](https?://[^"\']+\.(?:jpg|jpeg|png|gif|webp))["\']', r'\.src\s*=\s*["\'](https?://[^"\']+)["\']', r'loadImage\s*\(\s*["\'](https?://[^"\']+)["\']', r'background(?:-image)?\s*:\s*url\(["\']?(https?://[^"\']+)["\']?\)',],
         "video_sources": [r'["\'](https?://[^"\']+\.(?:mp4|webm|ogg))["\']', r'\.src\s*=\s*["\'](https?://[^"\']+\.(?:mp4|webm|ogg))["\']', r'loadVideo\s*\(\s*["\'](https?://[^"\']+)["\']',],
+        "audio_sources": [r'["\'](https?://[^"\']+\.(?:mp3|wav|ogg|aac|flac|m4a|opus))["\']', r'\.src\s*=\s*["\'](https?://[^"\']+\.(?:mp3|wav|ogg|aac|flac|m4a|opus))["\']', r'loadAudio\s*\(\s*["\'](https?://[^"\']+)["\']',],
         "data_attributes": [r'data-(?:src|original|lazy|load|image|video|poster|bg|background|url)\s*=\s*["\'](https?://[^"\']+)["\']', r'data-srcset\s*=\s*["\'](https?://[^"\']+(?:\s+\d+[wx])?(?:,\s*https?://[^"\']+(?:\s+\d+[wx])?)*)["\']',],
         "framework_patterns": {"react": r'className\s*=\s*["\'](lazy-load|image-loader)["\']', "vue": r'v-lazy\s*=\s*["\'](https?://[^"\']+)["\']', "angular": r'\[lazyLoad\]\s*=\s*["\'](https?://[^"\']+)["\']',}
     }
@@ -314,8 +316,17 @@ class WebpageParser:
             url, width = parts[0], 0
             if len(parts) > 1:
                 desc = parts[1]
-                if desc.endswith("w"): try: width = int(desc[:-1]); except ValueError: pass
-                elif desc.endswith("x"): try: density = float(desc[:-1]); width = int(density * 1000); except ValueError: pass 
+                if desc.endswith("w"):
+                    try:
+                        width = int(desc[:-1])
+                    except ValueError:
+                        pass
+                elif desc.endswith("x"):
+                    try:
+                        density = float(desc[:-1])
+                        width = int(density * 1000)
+                    except ValueError:
+                        pass
             candidates.append({"url": url, "width": width, "source": "srcset"})
         return candidates
 
@@ -465,6 +476,7 @@ class WebpageParser:
             soup = BeautifulSoup(content, "html.parser")
             await self._extract_images(soup) 
             await self._extract_videos(soup)
+            await self._extract_audio_files(soup) # Added call
             await self._extract_links(soup)
             if self.process_dynamic: 
                 await self._handle_dynamic_content(soup)
@@ -499,8 +511,15 @@ class WebpageParser:
 
     def _extract_media_from_js(self, js_content: str) -> None:
         for pattern_type, patterns in self.JS_PATTERNS.items():
-            if pattern_type in ["image_sources", "video_sources", "data_attributes"]:
-                media_hint = "image" if "image" in pattern_type else "video" if "video" in pattern_type else "image" 
+            if pattern_type in ["image_sources", "video_sources", "audio_sources", "data_attributes"]: # Added "audio_sources"
+                media_hint = "image" # Default
+                if "image" in pattern_type:
+                    media_hint = "image"
+                elif "video" in pattern_type:
+                    media_hint = "video"
+                elif "audio" in pattern_type: # Added this condition
+                    media_hint = "audio"
+                
                 for pattern in patterns:
                     for match in re.finditer(pattern, js_content):
                         url = match.group(1) 
@@ -508,6 +527,45 @@ class WebpageParser:
                             abs_url = urljoin(self.url, url)
                             attrs = {"source": f"js-static-{pattern_type}"}
                             self.media_files.append((media_hint, abs_url, attrs))
+
+    async def _extract_audio_files(self, soup: BeautifulSoup) -> None:
+        found = 0
+        # Find all <audio> tags with a src attribute
+        for audio_tag in soup.find_all("audio", src=True):
+            src_value = audio_tag.get("src")
+            if src_value:
+                abs_url = urljoin(self.url, src_value)
+                if abs_url.startswith(("http://", "https://")) and is_audio_url(abs_url): # Added is_audio_url check
+                    attrs = {
+                        "controls": audio_tag.has_attr("controls"),
+                        "loop": audio_tag.has_attr("loop"),
+                        "preload": audio_tag.get("preload", "")
+                    }
+                    self.media_files.append(("audio", abs_url, attrs))
+                    found += 1
+
+        # Find all <source> tags within <audio> tags
+        for audio_tag_parent in soup.find_all("audio"):
+            for source_tag in audio_tag_parent.find_all("source", src=True):
+                src_value = source_tag.get("src")
+                if src_value:
+                    abs_url = urljoin(self.url, src_value)
+                    if abs_url.startswith(("http://", "https://")) and is_audio_url(abs_url): # Added is_audio_url check
+                        attrs = {"type": source_tag.get("type", "")}
+                        self.media_files.append(("audio", abs_url, attrs))
+                        found += 1
+        
+        # Find all <a> tags linking to audio files
+        for a_tag in soup.find_all("a", href=True):
+            href_value = a_tag.get("href")
+            if href_value:
+                abs_url = urljoin(self.url, href_value)
+                if abs_url.startswith(("http://", "https://")) and is_audio_url(abs_url):
+                    attrs = {"text": a_tag.get_text(strip=True)}
+                    self.media_files.append(("audio", abs_url, attrs))
+                    found += 1
+        
+        logger.info(f"Found {found} audio files on {self.url}")
 
     def _process_framework_element(self, elem: Any, framework: str) -> None:
         attrs = {"source": f"framework-{framework}"}

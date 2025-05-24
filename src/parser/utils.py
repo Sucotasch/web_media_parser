@@ -125,10 +125,15 @@ def is_media_url(url):
     url_lower = url.lower()
     
     # Check for standard media file extensions
-    media_extensions = [
-        ".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg", ".bmp", ".avif",
-        ".mp4", ".webm", ".ogg", ".mov", ".mp3", ".wav", ".pdf"
+    AUDIO_EXTENSIONS = [".mp3", ".wav", ".ogg", ".aac", ".flac", ".m4a", ".opus"]
+    image_extensions = [
+        ".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg", ".tiff", ".bmp", ".avif"
     ]
+    video_extensions = [
+        ".mp4", ".webm", ".ogg", ".mov", ".avi", ".wmv", ".flv", ".mkv", ".m4v", ".ts", ".m3u8", ".mpd",
+        ".3gp", ".vob", ".mxf", ".f4v", ".mpg", ".mpeg", ".asf", ".rm", ".rmvb"
+    ]
+    media_extensions = image_extensions + video_extensions + AUDIO_EXTENSIONS + [".pdf"] # Added AUDIO_EXTENSIONS
     
     # Direct extension check - most reliable method
     if any(url_lower.endswith(ext) for ext in media_extensions):
@@ -288,7 +293,7 @@ def is_media_url(url):
     # Check for media-related query parameters
     query = parsed_url.query.lower()
     media_params = [
-        "image", "img", "photo", "pic", "video", "media", "file", "download",
+        "image", "img", "photo", "pic", "video", "audio", "media", "file", "download", # Added "audio"
         "media_url", "source", "src", "thumb", "preview", "original"
     ]
     for param in media_params:
@@ -296,6 +301,34 @@ def is_media_url(url):
             return True
 
     return False
+
+
+def is_audio_url(url):
+    """
+    Check if URL is likely to be a direct audio file based on extension or pattern
+    """
+    AUDIO_EXTENSIONS = [
+        ".mp3", ".wav", ".ogg", ".aac", ".flac", ".m4a", ".opus"
+    ]
+    url_lower = url.lower()
+
+    # Parse URL to handle query parameters properly
+    parsed_url = urlparse(url_lower)
+    path = parsed_url.path
+
+    # Basic extension check
+    if (any(path.endswith(ext) for ext in AUDIO_EXTENSIONS) or
+            any(f"{ext}?" in path for ext in AUDIO_EXTENSIONS)):
+        return True
+
+    # Advanced pattern matching
+    # This regex ensures the extension is at the end of the path or followed by a query/fragment.
+    audio_pattern = re.compile(
+        r"^https?://[a-zA-Z0-9\-.]+\.[a-zA-Z]{2,3}/(?:[^?#\s]+/)*[^?#\s]+\.(?:mp3|wav|ogg|aac|flac|m4a|opus)(?:[?#].*)?$",
+        re.IGNORECASE
+    )
+
+    return bool(audio_pattern.match(url_lower))
 
 
 def is_video_url(url):
@@ -347,7 +380,7 @@ def is_video_url(url):
         return True
     
     # Advanced pattern matching
-    video_pattern = re.compile(r"(https?://[a-zA-Z0-9\-.]+\.[a-zA-Z]{2,3}(/\S*)\.(mp4|webm|ogg|mov|avi|wmv|flv|mkv|m4v|ts|m3u8)(\?.*)?)", re.IGNORECASE)
+    video_pattern = re.compile(r"(https?://[a-zA-Z0-9\-.]+\.[a-zA-Z]{2,3}(/\S*)\.(mp4|webm|ogg|mov|avi|wmv|flv|mkv|m4v|ts|m3u8|mpd|3gp|vob|mxf|f4v|mpg|mpeg|asf|rm|rmvb)(\?.*)?)", re.IGNORECASE) # Added more extensions to regex
     streaming_pattern = re.compile(r"(https?://[^\s]+\.(m3u8|mpd)(\?[^\s]*)?|https?://[^\s]+/playlist\.m3u8|https?://[^\s]+/manifest\.mpd)", re.IGNORECASE)
     
     # Check for common video filename patterns

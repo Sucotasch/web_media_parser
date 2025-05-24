@@ -89,6 +89,7 @@ class ParserManager(QObject):
 
         self.stats = {
             "pages_processed": 0, "images_found": 0, "videos_found": 0,
+            "audio_files_found": 0, # Add this line
             "files_downloaded": 0, "files_skipped": 0,
         }
         
@@ -372,8 +373,12 @@ class ParserManager(QObject):
                     "attrs": attrs, "filepath": full_filepath_for_downloader,
                 }
                 await self.download_queue.put(media_item)
-                if media_type == "image": self.stats["images_found"] += 1
-                elif media_type == "video": self.stats["videos_found"] += 1
+                if media_type == "image":
+                    self.stats["images_found"] += 1
+                elif media_type == "video":
+                    self.stats["videos_found"] += 1
+                elif media_type == "audio": # Add this condition
+                    self.stats["audio_files_found"] += 1
             except Exception as err:
                 logger.error(f"Error processing media file {url}: {str(err)}", exc_info=True)
 
@@ -450,7 +455,7 @@ class ParserManager(QObject):
         while self.is_running and not self._stop_event.is_set():
             try:
                 if self.is_paused and not self._pause_event.is_set(): time.sleep(0.5); continue
-                total_found = self.stats["images_found"] + self.stats["videos_found"]
+                total_found = self.stats["images_found"] + self.stats["videos_found"] + self.stats["audio_files_found"] # Added audio_files_found
                 total_proc = self.stats["files_downloaded"] + self.stats["files_skipped"]
                 if total_found > 0: self.total_progress_updated.emit(int((total_proc / total_found) * 100))
                 else: self.total_progress_updated.emit(0) 
