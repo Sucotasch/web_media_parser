@@ -19,7 +19,6 @@ import threading
 import traceback
 from typing import Dict, Any, Set, List, Optional, Tuple
 from urllib.parse import urlparse, urljoin
-# from concurrent.futures import ThreadPoolExecutor # Not actively used in current provided code
 
 from PySide6.QtCore import QObject, Signal
 # from bs4 import BeautifulSoup # Not used directly in ParserManager
@@ -101,31 +100,33 @@ class ParserManager(QObject):
 
     def _load_domain_blocklist(self, blocklist_file_name: str = K.DOMAIN_BLOCKLIST_FILENAME) -> Set[str]:
         blocked_domains: Set[str] = set()
-        current_script_dir = os.path.dirname(os.path.abspath(__file__))
-        path_in_parser_dir = os.path.join(current_script_dir, blocklist_file_name)
+        # Path relative to the current script directory
+        script_dir_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), blocklist_file_name)
         
-        paths_to_try = [blocklist_file_name, path_in_parser_dir]
-        path_found = None
+        # Path as provided (could be relative to CWD or absolute)
+        provided_path = blocklist_file_name
 
-        if blocklist_file_name == K.DOMAIN_BLOCKLIST_FILENAME and os.path.exists(path_in_parser_dir):
-            path_found = path_in_parser_dir
-        else:
-            for path_try in paths_to_try:
-                if os.path.exists(path_try):
-                    path_found = path_try
-                    break
+        path_to_load = None
+        if os.path.exists(script_dir_path):
+            path_to_load = script_dir_path
+        elif os.path.exists(provided_path):
+            path_to_load = provided_path
         
-        if path_found:
+        if path_to_load:
             try:
-                with open(path_found, "r", encoding="utf-8") as f:
+                with open(path_to_load, "r", encoding="utf-8") as f:
                     for line in f:
                         domain = line.strip()
-                        if domain and not domain.startswith("#"): blocked_domains.add(domain)
-                logger.info(f"Loaded {len(blocked_domains)} domains into the blocklist from {path_found}.")
+                        if domain and not domain.startswith("#"):
+                            blocked_domains.add(domain)
+                logger.info(f"Loaded {len(blocked_domains)} domains into the blocklist from {path_to_load}.")
             except Exception as e:
-                logger.error(f"Error loading domain blocklist from {path_found}: {e}", exc_info=True)
+                logger.error(f"Error loading domain blocklist from {path_to_load}: {e}", exc_info=True)
         else:
-            logger.warning(f"Domain blocklist file not found (tried paths like '{path_in_parser_dir}'). Proceeding with an empty blocklist.")
+            logger.warning(
+                f"Domain blocklist file not found. Tried: '{script_dir_path}' and '{provided_path}'. "
+                "Proceeding with an empty blocklist."
+            )
         return blocked_domains
 
     async def _update_queue_priorities(
@@ -249,7 +250,7 @@ class ParserManager(QObject):
             async with WebpageParser(
                 url=url, settings=self.settings,
                 process_js=self.settings.get(K.SETTING_PROCESS_JS, K.DEFAULT_PROCESS_JS),
-                process_dynamic=self.settings.get(K.SETTING_PROCESS_DYNAMIC, K.DEFAULT_PROCESS_DYNAMIC),
+                # process_dynamic argument removed
                 external_session=session, pattern_manager=self.pattern_manager
             ) as p: 
                 links_dict, media_files_found = await p.parse()

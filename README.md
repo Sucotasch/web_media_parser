@@ -13,10 +13,6 @@ A powerful application for parsing and downloading media files from websites wit
 - **Download Management**: Progress tracking, pause/resume functionality, and duplicate detection
 - **Configurable Settings**: Customizable depth limits, thread counts, file filters, and more
 
-## Screenshots
-
-![Main Interface](docs/screenshot-main.png)
-*Main application interface showing parsing progress and discovered media*
 
 ## Installation
 
@@ -30,8 +26,8 @@ A powerful application for parsing and downloading media files from websites wit
 
 1. Clone this repository:
 ```bash
-git clone https://github.com/yourusername/web_media_parser.git
-cd web_media_parser
+git clone https://github.com/yourusername/yourreponame.git
+cd yourreponame
 ```
 
 2. Install dependencies:
@@ -146,7 +142,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 If you encounter any issues or have questions:
 
-1. Check the [Issues](https://github.com/yourusername/web_media_parser/issues) page
+1. Check the [Issues](https://github.com/yourusername/yourreponame/issues) page
 2. Create a new issue with detailed information about the problem
 3. Include log files and screenshots if relevant
 
