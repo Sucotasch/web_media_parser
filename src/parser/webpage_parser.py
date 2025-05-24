@@ -78,14 +78,14 @@ class WebpageParser:
 
     def __init__(
         self, url: str, settings: Dict[str, Any],
-        process_js: bool, process_dynamic: bool, 
+        process_js: bool, # This will now control all advanced content extraction
         external_session: aiohttp.ClientSession, 
         pattern_manager: Optional[SitePatternManager] = None,
     ):
         self.url = url
         self.settings = settings 
-        self.process_js = process_js
-        self.process_dynamic = process_dynamic
+        self.process_js = process_js 
+        # self.process_dynamic = process_dynamic # Removed, covered by process_js
         self.domain = get_domain(url)
         
         self.sync_session = self._create_sync_session() 
@@ -466,7 +466,7 @@ class WebpageParser:
             await self._extract_images(soup) 
             await self._extract_videos(soup)
             await self._extract_links(soup)
-            if self.process_dynamic: 
+            if self.process_js: # Changed from self.process_dynamic
                 await self._handle_dynamic_content(soup)
             
             return self.links, self.media_files, K.PARSER_SUCCESS, "Successfully parsed.", http_status_code
@@ -477,6 +477,9 @@ class WebpageParser:
 
 
     async def _handle_dynamic_content(self, soup: BeautifulSoup) -> None:
+        # The check `if not self.process_js: return` is no longer strictly needed here
+        # because the call to this method is already gated by self.process_js.
+        # However, keeping it doesn't harm and adds an extra layer of safety if called from elsewhere.
         try:
             if not self.process_js: return 
             for script_tag in soup.find_all("script"):

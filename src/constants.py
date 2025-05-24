@@ -46,8 +46,8 @@ DEFAULT_SAVE_PATH = "downloads" # Default download directory base name
 
 # Parser Behavior
 DEFAULT_STAY_IN_DOMAIN = True
-DEFAULT_PROCESS_JS = True       # Whether to attempt static JS analysis
-DEFAULT_PROCESS_DYNAMIC = True  # Alias or combined with process_js for dynamic content
+DEFAULT_PROCESS_JS = True       # Whether to attempt static JS analysis and other advanced content extraction
+# DEFAULT_PROCESS_DYNAMIC = True  # Removed, consolidated into PROCESS_JS
 DEFAULT_BYPASS_COOKIE_CONSENT = True
 DEFAULT_BYPASS_JS_REDIRECTS = True
 DEFAULT_USE_PATTERNS = True     # For SitePatternManager
@@ -106,8 +106,8 @@ SETTING_REFERRER_POLICY = "referrer" # "auto", "origin", "none"
 SETTING_STAY_IN_DOMAIN = "stay_in_domain"
 SETTING_USE_PATTERNS = "use_patterns"
 SETTING_CUSTOM_PATTERN_PATH = "custom_pattern_path"
-SETTING_PROCESS_JS = "process_js"
-SETTING_PROCESS_DYNAMIC = "process_dynamic" # Often same as process_js
+SETTING_PROCESS_JS = "process_js" # This now controls all advanced content extraction
+# SETTING_PROCESS_DYNAMIC = "process_dynamic" # Removed
 SETTING_BYPASS_COOKIE_CONSENT = "bypass_cookie_consent"
 SETTING_BYPASS_JS_REDIRECTS = "bypass_js_redirects"
 SETTING_STOP_WORDS = "stop_words" # List of strings
@@ -133,7 +133,7 @@ DEFAULT_SETTINGS_VALUES = {
     SETTING_USE_PATTERNS: DEFAULT_USE_PATTERNS,
     SETTING_CUSTOM_PATTERN_PATH: "",
     SETTING_PROCESS_JS: DEFAULT_PROCESS_JS,
-    SETTING_PROCESS_DYNAMIC: DEFAULT_PROCESS_DYNAMIC,
+    # SETTING_PROCESS_DYNAMIC: DEFAULT_PROCESS_DYNAMIC, # Removed
     SETTING_BYPASS_COOKIE_CONSENT: DEFAULT_BYPASS_COOKIE_CONSENT,
     SETTING_BYPASS_JS_REDIRECTS: DEFAULT_BYPASS_JS_REDIRECTS,
     SETTING_STOP_WORDS: DEFAULT_STOP_WORDS,
